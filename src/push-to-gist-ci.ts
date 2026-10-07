@@ -71,41 +71,36 @@ async function updateGist(files: Record<string, string>): Promise<void> {
       { waitUntil: 'domcontentloaded', timeout: 30000 }
     );
 
-    // カレンダーが表示されるまで待機（CF チャレンジ中は表示されない）
+    // CF チャレンジ解決を含めて最大60秒待機
     try {
-      await shimPage.waitForSelector('input[name="bus_front_availability_date"]', { timeout: 20000 });
+      await shimPage.waitForSelector('input[name="bus_front_availability_date"]', { timeout: 60000 });
+      console.log('  カレンダー読み込み完了');
     } catch {
-      console.warn('  [PB1新橋] カレンダー読み込み失敗（CF チャレンジ？）→ スキップ');
+      console.warn('  [PB1新橋] カレンダー読み込み失敗（CF チャレンジ未解決）→ スキップ');
     }
 
     if (shimPage.url().includes('/login') || shimPage.url().includes('id-sso.reserva.be')) {
       console.warn('  [PB1新橋] ログインページへリダイレクト → スキップ');
     } else {
+      // 1日目: goto で CF clearance クッキーを取得してからコンテンツを読む
+      // 2日目以降: page.evaluate の fetch() で同一セッション内取得（goto は CF 再チャレンジを誘発するため使わない）
       for (let i = 0; i < EXPORT_DAYS; i++) {
         const date = addDays(today, i);
         const stamp = date.replace(/-/g, '');
-
-        if (i > 0) {
-          await shimPage.goto(
-            `${availBase}?bus_front_availability_date=${stamp}&bus_front_availability_time_from=6&bus_front_availability_time_to=23`,
-            { waitUntil: 'domcontentloaded', timeout: 30000 }
-          );
-          // カレンダーが表示されるまで待機
-          try {
-            await shimPage.waitForSelector('input[name="bus_front_availability_date"]', { timeout: 20000 });
-          } catch {
-            console.warn(`  [${date}] カレンダー待機タイムアウト → スキップ`);
-            continue;
-          }
-        }
-
-        if (shimPage.url().includes('/login')) {
-          console.warn(`  [${date}] セッション切れ → 以降スキップ`);
-          break;
-        }
+        const url = `${availBase}?bus_front_availability_date=${stamp}&bus_front_availability_time_from=6&bus_front_availability_time_to=23`;
 
         try {
-          const html = await shimPage.content();
+          let html: string;
+          if (i === 0) {
+            html = await shimPage.content();
+          } else {
+            // ページ内 fetch — CF clearance クッキーが自動で付与される
+            html = await shimPage.evaluate(async (fetchUrl: string): Promise<string> => {
+              const r = await fetch(fetchUrl, { method: 'GET', credentials: 'same-origin' });
+              return r.text();
+            }, url);
+          }
+
           if (!html.includes(`name="bus_front_availability_date"`)) {
             const preview = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200);
             console.warn(`  [${date}] カレンダーなし → スキップ (preview: ${preview})`);
