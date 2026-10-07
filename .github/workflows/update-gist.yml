@@ -1,0 +1,30 @@
+name: Update Pickleball Gist
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # 2時間ごと (UTC)
+  workflow_dispatch:          # 手動実行も可能
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run updater
+        env:
+          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
+          RESERVA_GIST_ID: ${{ secrets.RESERVA_GIST_ID }}
+        run: npm run update
