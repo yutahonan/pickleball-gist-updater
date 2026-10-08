@@ -206,7 +206,9 @@ async function updateGist(files: Record<string, string>): Promise<void> {
     const url = `https://yoyaku.labola.jp/r/shop/${LABOLA_SHOP}/calendar/${y}/${Number(mo)}/${Number(d)}/?tab_name=${LABOLA_TAB}`;
     const stamp = date.replace(/-/g, '');
 
-    if (i > 0) await new Promise(r => setTimeout(r, 2000));
+    // labola.jp rate-limits to ~3 requests per window; pause 30s after every 3rd
+    if (i > 0 && i % 3 === 0) await new Promise(r => setTimeout(r, 30000));
+    else if (i > 0) await new Promise(r => setTimeout(r, 2000));
 
     try {
       const res = await fetch(url, {
