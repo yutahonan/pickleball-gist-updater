@@ -96,7 +96,7 @@ async function updateGist(files: Record<string, string>): Promise<void> {
           } else {
             // ページ内 fetch — CF clearance クッキーが自動で付与される
             html = await shimPage.evaluate(async (fetchUrl: string): Promise<string> => {
-              const r = await fetch(fetchUrl, { method: 'GET', credentials: 'same-origin' });
+              const r = await fetch(fetchUrl, { method: 'GET', credentials: 'same-origin', headers: { 'Accept-Language': 'ja,en;q=0.9' } });
               return r.text();
             }, url);
           }
@@ -191,13 +191,59 @@ async function updateGist(files: Record<string, string>): Promise<void> {
 
   await browser.close();
 
+  // ──────────────────────────────────────────
+  // THE PICKLE BANG THEORY (labola.jp)
+  // ──────────────────────────────────────────
+  console.log(`\n[PBT] HTML取得開始 (${EXPORT_DAYS}日分)`);
+  const LABOLA_SHOP = '3473';
+  const LABOLA_TAB = encodeURIComponent('ピックルボールコート');
+  const LABOLA_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  const labolaDates: string[] = [];
+
+  for (let i = 0; i < EXPORT_DAYS; i++) {
+    const date = addDays(today, i);
+    const [y, mo, d] = date.split('-');
+    const url = `https://yoyaku.labola.jp/r/shop/${LABOLA_SHOP}/calendar/${y}/${Number(mo)}/${Number(d)}/?tab_name=${LABOLA_TAB}`;
+    const stamp = date.replace(/-/g, '');
+
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'User-Agent': LABOLA_UA,
+          'Accept-Language': 'ja-JP,ja;q=0.9',
+          'Accept': 'text/html',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!res.ok) {
+        console.warn(`  [${date}] HTTP ${res.status} → スキップ`);
+        continue;
+      }
+
+      const html = await res.text();
+      if (!html.includes(`/shop/${LABOLA_SHOP}/`)) {
+        console.warn(`  [${date}] カレンダー確認できず → スキップ`);
+        continue;
+      }
+
+      files[`labola_${stamp}.html`] = html;
+      labolaDates.push(date);
+      console.log(`  ${date} OK (${html.length} bytes)`);
+    } catch (e: any) {
+      console.warn(`  [${date}] 取得失敗: ${e.message}`);
+    }
+  }
+
   files['metadata.json'] = JSON.stringify({
     updatedAt: new Date().toISOString(),
     shimbashiDates,
     towerMonths,
+    labolaDates,
   });
 
-  console.log(`\n取得結果: 新橋 ${shimbashiDates.length}日 / タワー ${towerMonths.length}ヶ月`);
+  console.log(`\n取得結果: 新橋 ${shimbashiDates.length}日 / タワー ${towerMonths.length}ヶ月 / PBT ${labolaDates.length}日`);
   await updateGist(files);
   console.log('完了');
 })().catch(err => {
