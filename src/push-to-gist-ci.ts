@@ -206,6 +206,8 @@ async function updateGist(files: Record<string, string>): Promise<void> {
     const url = `https://yoyaku.labola.jp/r/shop/${LABOLA_SHOP}/calendar/${y}/${Number(mo)}/${Number(d)}/?tab_name=${LABOLA_TAB}`;
     const stamp = date.replace(/-/g, '');
 
+    if (i > 0) await new Promise(r => setTimeout(r, 2000));
+
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -213,6 +215,7 @@ async function updateGist(files: Record<string, string>): Promise<void> {
           'User-Agent': LABOLA_UA,
           'Accept-Language': 'ja-JP,ja;q=0.9',
           'Accept': 'text/html',
+          'Referer': `https://yoyaku.labola.jp/r/shop/${LABOLA_SHOP}/`,
         },
         signal: AbortSignal.timeout(15000),
       });
