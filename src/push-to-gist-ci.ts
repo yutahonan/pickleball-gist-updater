@@ -194,20 +194,22 @@ async function updateGist(files: Record<string, string>): Promise<void> {
   // ──────────────────────────────────────────
   // THE PICKLE BANG THEORY (labola.jp)
   // ──────────────────────────────────────────
-  console.log(`\n[PBT] HTML取得開始 (${EXPORT_DAYS}日分)`);
+  // labola.jp rate window is ~2 minutes; fetch 3 days then wait 120s.
+  // 5 batches × 3 days = 15 days within the 15-min workflow timeout.
+  const LABOLA_DAYS = 15;
+  console.log(`\n[PBT] HTML取得開始 (${LABOLA_DAYS}日分)`);
   const LABOLA_SHOP = '3473';
   const LABOLA_TAB = encodeURIComponent('ピックルボールコート');
   const LABOLA_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
   const labolaDates: string[] = [];
 
-  for (let i = 0; i < EXPORT_DAYS; i++) {
+  for (let i = 0; i < LABOLA_DAYS; i++) {
     const date = addDays(today, i);
     const [y, mo, d] = date.split('-');
     const url = `https://yoyaku.labola.jp/r/shop/${LABOLA_SHOP}/calendar/${y}/${Number(mo)}/${Number(d)}/?tab_name=${LABOLA_TAB}`;
     const stamp = date.replace(/-/g, '');
 
-    // labola.jp rate-limits to ~3 requests per window; pause 30s after every 3rd
-    if (i > 0 && i % 3 === 0) await new Promise(r => setTimeout(r, 30000));
+    if (i > 0 && i % 3 === 0) await new Promise(r => setTimeout(r, 120000));
     else if (i > 0) await new Promise(r => setTimeout(r, 2000));
 
     try {
@@ -248,7 +250,7 @@ async function updateGist(files: Record<string, string>): Promise<void> {
     labolaDates,
   });
 
-  console.log(`\n取得結果: 新橋 ${shimbashiDates.length}日 / タワー ${towerMonths.length}ヶ月 / PBT ${labolaDates.length}日`);
+  console.log(`\n取得結果: 新橋 ${shimbashiDates.length}日 / タワー ${towerMonths.length}ヶ月 / PBT ${labolaDates.length}/${LABOLA_DAYS}日`);
   await updateGist(files);
   console.log('完了');
 })().catch(err => {
