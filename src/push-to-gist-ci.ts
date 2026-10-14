@@ -14,7 +14,7 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const SHIMBASHI_SLUG = 'pboneginza';
 const TOWER_BOOKING_URL = 'https://reserva.be/tokyotowerpickleball/reserve?mode=service_staff&search_evt_no=42eJwzNDQzNTUDAAQ4ATk';
 const EXPORT_DAYS = 30;
-const LABOLA_DAYS = 12;
+const LABOLA_DAYS = 14;
 
 const HOLIDAYS = new Set([
   '2026-01-01','2026-01-12','2026-02-11','2026-02-23','2026-03-20',
