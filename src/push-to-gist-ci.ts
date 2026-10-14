@@ -661,21 +661,27 @@ function extractTowerSlots(weekTimeArray: Record<string, any>, today: string, st
     if (i > 0 && i % 3 === 0) await new Promise(r => setTimeout(r, 120000));
     else if (i > 0) await new Promise(r => setTimeout(r, 2000));
 
-    try {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: { 'User-Agent': UA, 'Accept-Language': 'ja-JP,ja;q=0.9', 'Accept': 'text/html', 'Referer': `https://yoyaku.labola.jp/r/shop/${LABOLA_SHOP}/` },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) { console.warn(`  [${date}] HTTP ${res.status} → スキップ`); continue; }
-      const html = await res.text();
-      if (!html.includes(`/shop/${LABOLA_SHOP}/`)) { console.warn(`  [${date}] カレンダー確認できず → スキップ`); continue; }
-      files[`labola_${stamp}.html`] = html;
-      labolaDates.push(date);
-      console.log(`  ${date} OK (${html.length}B)`);
-    } catch (e: any) {
-      console.warn(`  [${date}] 取得失敗: ${e.message}`);
+    let succeeded = false;
+    for (let attempt = 0; attempt < 2 && !succeeded; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 10000));
+      try {
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: { 'User-Agent': UA, 'Accept-Language': 'ja-JP,ja;q=0.9', 'Accept': 'text/html', 'Referer': `https://yoyaku.labola.jp/r/shop/${LABOLA_SHOP}/` },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) { console.warn(`  [${date}] HTTP ${res.status} (attempt ${attempt + 1})`); continue; }
+        const html = await res.text();
+        if (!html.includes(`/shop/${LABOLA_SHOP}/`)) { console.warn(`  [${date}] カレンダー確認できず (attempt ${attempt + 1})`); continue; }
+        files[`labola_${stamp}.html`] = html;
+        labolaDates.push(date);
+        console.log(`  ${date} OK (${html.length}B)`);
+        succeeded = true;
+      } catch (e: any) {
+        console.warn(`  [${date}] 取得失敗 (attempt ${attempt + 1}): ${e.message}`);
+      }
     }
+    if (!succeeded) console.warn(`  [${date}] スキップ`);
   }
 
   // ──────────────────────────────────────────
