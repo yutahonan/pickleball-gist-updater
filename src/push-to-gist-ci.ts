@@ -472,8 +472,12 @@ function extractTowerSlots(weekTimeArray: Record<string, any>, today: string, st
 // ──────────────────────────────────────────────────────────────
 // Main
 // ──────────────────────────────────────────────────────────────
+// GitHub Actions 以外ではブラウザ起動をスキップ（ローカル確認用）
+// 強制有効化: RUN_BROWSER=true npm run update
+const USE_BROWSER = process.env.GITHUB_ACTIONS === 'true' || process.env.RUN_BROWSER === 'true';
+
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = USE_BROWSER ? await chromium.launch({ headless: true }) : null;
   const today = jstDateStr();
   const now = new Date().toISOString();
   const files: Record<string, string> = {};
@@ -483,167 +487,175 @@ function extractTowerSlots(weekTimeArray: Record<string, any>, today: string, st
   const shimbashiSlots: Slots = {};
   const towerSlots: Slots = {};
 
-  // ──────────────────────────────────────────
-  // PB1新橋
-  // ──────────────────────────────────────────
-  console.log(`\n[PB1新橋] HTML取得開始 (${EXPORT_DAYS}日分)`);
   const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-  const shimCtx = await browser.newContext({ userAgent: UA, locale: 'ja-JP', extraHTTPHeaders: { 'Accept-Language': 'ja,en;q=0.9' } });
-  const shimPage = await shimCtx.newPage();
-  const availBase = `https://reserva.be/${SHIMBASHI_SLUG}/availability`;
 
-  try {
-    const firstStamp = today.replace(/-/g, '');
-    await shimPage.goto(
-      `${availBase}?bus_front_availability_date=${firstStamp}&bus_front_availability_time_from=6&bus_front_availability_time_to=23`,
-      { waitUntil: 'domcontentloaded', timeout: 30000 }
-    );
+  // ──────────────────────────────────────────
+  // PB1新橋 (ブラウザ必須: Cloudflare)
+  // ──────────────────────────────────────────
+  if (USE_BROWSER) {
+    console.log(`\n[PB1新橋] HTML取得開始 (${EXPORT_DAYS}日分)`);
+    const shimCtx = await browser!.newContext({ userAgent: UA, locale: 'ja-JP', extraHTTPHeaders: { 'Accept-Language': 'ja,en;q=0.9' } });
+    const shimPage = await shimCtx.newPage();
+    const availBase = `https://reserva.be/${SHIMBASHI_SLUG}/availability`;
+
     try {
-      await shimPage.waitForSelector('input[name="bus_front_availability_date"]', { timeout: 60000 });
-      console.log('  カレンダー読み込み完了');
-    } catch {
-      console.warn('  [PB1新橋] カレンダー読み込み失敗（CF チャレンジ未解決）→ スキップ');
-    }
-
-    if (shimPage.url().includes('/login') || shimPage.url().includes('id-sso.reserva.be')) {
-      console.warn('  [PB1新橋] ログインページへリダイレクト → スキップ');
-    } else {
-      const SHIM_COLS = 17, SHIM_START = 6;
-
-      function processShimData(date: string, rowNames: string[], circleIndices: number[]) {
-        for (const idx of circleIndices) {
-          const row = Math.floor(idx / SHIM_COLS);
-          const col = idx % SHIM_COLS;
-          const hour = SHIM_START + col;
-          const name = rowNames[row + 1] ?? '';
-          if (!name.includes('レンタルコート')) continue;
-          if (!isTargetHour(hour, date)) continue;
-          const m = name.match(/（([^）]+)）/);
-          const courtName = m ? m[1] : name.replace(/[【】]/g, '').trim();
-          const key = `${date}|${hour}`;
-          if (!shimbashiSlots[key]) shimbashiSlots[key] = [];
-          if (!shimbashiSlots[key].includes(courtName)) shimbashiSlots[key].push(courtName);
-        }
+      const firstStamp = today.replace(/-/g, '');
+      await shimPage.goto(
+        `${availBase}?bus_front_availability_date=${firstStamp}&bus_front_availability_time_from=6&bus_front_availability_time_to=23`,
+        { waitUntil: 'domcontentloaded', timeout: 30000 }
+      );
+      try {
+        await shimPage.waitForSelector('input[name="bus_front_availability_date"]', { timeout: 60000 });
+        console.log('  カレンダー読み込み完了');
+      } catch {
+        console.warn('  [PB1新橋] カレンダー読み込み失敗（CF チャレンジ未解決）→ スキップ');
       }
 
-      for (let i = 0; i < EXPORT_DAYS; i++) {
-        const date = addDays(today, i);
-        const stamp = date.replace(/-/g, '');
-        const url = `${availBase}?bus_front_availability_date=${stamp}&bus_front_availability_time_from=6&bus_front_availability_time_to=23`;
-        try {
-          let html: string, rowNames: string[], circleIndices: number[];
+      if (shimPage.url().includes('/login') || shimPage.url().includes('id-sso.reserva.be')) {
+        console.warn('  [PB1新橋] ログインページへリダイレクト → スキップ');
+      } else {
+        const SHIM_COLS = 17, SHIM_START = 6;
 
-          if (i === 0) {
-            html = await shimPage.content();
-            const dom = await shimPage.evaluate(() => {
-              const ths = document.querySelectorAll('.availability-list__column-header thead tr th');
-              const rowNames = Array.from(ths).map(th => (th as HTMLElement).textContent?.trim() ?? '');
-              const cells = document.querySelectorAll('.availability-list__vacancy');
-              const circleIndices: number[] = [];
-              cells.forEach((cell, idx) => {
-                if (cell.querySelector('a.availability-list__vacancy__data_link.circle')) circleIndices.push(idx);
-              });
-              return { rowNames, circleIndices };
-            });
-            rowNames = dom.rowNames;
-            circleIndices = dom.circleIndices;
-          } else {
-            const fetched = await shimPage.evaluate(async (fetchUrl: string) => {
-              const r = await fetch(fetchUrl, { method: 'GET', credentials: 'same-origin', headers: { 'Accept-Language': 'ja,en;q=0.9' } });
-              const html = await r.text();
-              const doc = new DOMParser().parseFromString(html, 'text/html');
-              const ths = doc.querySelectorAll('.availability-list__column-header thead tr th');
-              const rowNames = Array.from(ths).map(th => (th as HTMLElement).textContent?.trim() ?? '');
-              const cells = doc.querySelectorAll('.availability-list__vacancy');
-              const circleIndices: number[] = [];
-              cells.forEach((cell, idx) => {
-                if (cell.querySelector('a.availability-list__vacancy__data_link.circle')) circleIndices.push(idx);
-              });
-              return { html, rowNames, circleIndices };
-            }, url);
-            html = fetched.html;
-            rowNames = fetched.rowNames;
-            circleIndices = fetched.circleIndices;
+        function processShimData(date: string, rowNames: string[], circleIndices: number[]) {
+          for (const idx of circleIndices) {
+            const row = Math.floor(idx / SHIM_COLS);
+            const col = idx % SHIM_COLS;
+            const hour = SHIM_START + col;
+            const name = rowNames[row + 1] ?? '';
+            if (!name.includes('レンタルコート')) continue;
+            if (!isTargetHour(hour, date)) continue;
+            const m = name.match(/（([^）]+)）/);
+            const courtName = m ? m[1] : name.replace(/[【】]/g, '').trim();
+            const key = `${date}|${hour}`;
+            if (!shimbashiSlots[key]) shimbashiSlots[key] = [];
+            if (!shimbashiSlots[key].includes(courtName)) shimbashiSlots[key].push(courtName);
           }
+        }
 
-          if (!html.includes('bus_front_availability_date')) {
-            console.warn(`  [${date}] カレンダーなし → スキップ`);
-            continue;
+        for (let i = 0; i < EXPORT_DAYS; i++) {
+          const date = addDays(today, i);
+          const stamp = date.replace(/-/g, '');
+          const url = `${availBase}?bus_front_availability_date=${stamp}&bus_front_availability_time_from=6&bus_front_availability_time_to=23`;
+          try {
+            let html: string, rowNames: string[], circleIndices: number[];
+
+            if (i === 0) {
+              html = await shimPage.content();
+              const dom = await shimPage.evaluate(() => {
+                const ths = document.querySelectorAll('.availability-list__column-header thead tr th');
+                const rowNames = Array.from(ths).map(th => (th as HTMLElement).textContent?.trim() ?? '');
+                const cells = document.querySelectorAll('.availability-list__vacancy');
+                const circleIndices: number[] = [];
+                cells.forEach((cell, idx) => {
+                  if (cell.querySelector('a.availability-list__vacancy__data_link.circle')) circleIndices.push(idx);
+                });
+                return { rowNames, circleIndices };
+              });
+              rowNames = dom.rowNames;
+              circleIndices = dom.circleIndices;
+            } else {
+              const fetched = await shimPage.evaluate(async (fetchUrl: string) => {
+                const r = await fetch(fetchUrl, { method: 'GET', credentials: 'same-origin', headers: { 'Accept-Language': 'ja,en;q=0.9' } });
+                const html = await r.text();
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                const ths = doc.querySelectorAll('.availability-list__column-header thead tr th');
+                const rowNames = Array.from(ths).map(th => (th as HTMLElement).textContent?.trim() ?? '');
+                const cells = doc.querySelectorAll('.availability-list__vacancy');
+                const circleIndices: number[] = [];
+                cells.forEach((cell, idx) => {
+                  if (cell.querySelector('a.availability-list__vacancy__data_link.circle')) circleIndices.push(idx);
+                });
+                return { html, rowNames, circleIndices };
+              }, url);
+              html = fetched.html;
+              rowNames = fetched.rowNames;
+              circleIndices = fetched.circleIndices;
+            }
+
+            if (!html.includes('bus_front_availability_date')) {
+              console.warn(`  [${date}] カレンダーなし → スキップ`);
+              continue;
+            }
+            files[`shimbashi_${stamp}.html`] = html;
+            shimbashiDates.push(date);
+            processShimData(date, rowNames, circleIndices);
+            console.log(`  ${date} OK (${html.length}B, available:${circleIndices.length})`);
+          } catch (e: any) {
+            console.warn(`  [${date}] 取得失敗: ${e.message}`);
           }
-          files[`shimbashi_${stamp}.html`] = html;
-          shimbashiDates.push(date);
-          processShimData(date, rowNames, circleIndices);
-          console.log(`  ${date} OK (${html.length}B, available:${circleIndices.length})`);
-        } catch (e: any) {
-          console.warn(`  [${date}] 取得失敗: ${e.message}`);
         }
       }
+    } finally {
+      await shimPage.close();
+      await shimCtx.close();
     }
-  } finally {
-    await shimPage.close();
-    await shimCtx.close();
+    files['shimbashi_slots.json'] = makeSlotFile('PB1新橋', 'https://reserva.be/pboneginza', shimbashiSlots);
+    console.log(`  shimbashi slots: ${Object.keys(shimbashiSlots).length}`);
+  } else {
+    console.log('\n[PB1新橋] スキップ（ブラウザなしモード）');
   }
-  files['shimbashi_slots.json'] = makeSlotFile('PB1新橋', 'https://reserva.be/pboneginza', shimbashiSlots);
-  console.log(`  shimbashi slots: ${Object.keys(shimbashiSlots).length}`);
 
   // ──────────────────────────────────────────
-  // 東京タワー
+  // 東京タワー (ブラウザ必須: Cloudflare)
   // ──────────────────────────────────────────
-  console.log('\n[東京タワー] AjaxSearch JSON取得開始');
-  const uniqueMonths = new Set<string>();
-  for (let i = 0; i < EXPORT_DAYS; i++) uniqueMonths.add(addDays(today, i).slice(0, 7));
+  if (USE_BROWSER) {
+    console.log('\n[東京タワー] AjaxSearch JSON取得開始');
+    const uniqueMonths = new Set<string>();
+    for (let i = 0; i < EXPORT_DAYS; i++) uniqueMonths.add(addDays(today, i).slice(0, 7));
 
-  const towerCtx = await browser.newContext({ userAgent: UA, locale: 'ja-JP', extraHTTPHeaders: { 'Accept-Language': 'ja,en;q=0.9' } });
-  const towerPage = await towerCtx.newPage();
-  try {
-    await towerPage.goto(TOWER_BOOKING_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    try { await towerPage.waitForSelector('#reserve_bus_cd', { timeout: 20000 }); } catch {
-      console.warn('  [東京タワー] ページ読み込み失敗 → スキップ');
-    }
+    const towerCtx = await browser!.newContext({ userAgent: UA, locale: 'ja-JP', extraHTTPHeaders: { 'Accept-Language': 'ja,en;q=0.9' } });
+    const towerPage = await towerCtx.newPage();
+    try {
+      await towerPage.goto(TOWER_BOOKING_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      try { await towerPage.waitForSelector('#reserve_bus_cd', { timeout: 20000 }); } catch {
+        console.warn('  [東京タワー] ページ読み込み失敗 → スキップ');
+      }
 
-    if (towerPage.url().includes('/login') || towerPage.url().includes('id-sso.reserva.be')) {
-      console.warn('  [東京タワー] ログインページへリダイレクト → スキップ');
-    } else {
-      for (const month of uniqueMonths) {
-        const targetDate = month.replace('-', '/') + '/01';
-        const stamp = month.replace('-', '');
-        try {
-          const calText: string = await towerPage.evaluate(async (td: string) => {
-            const params = new URLSearchParams({
-              cmd: 'get_new_institution', reserve_bus_cd: '341125', reserve_ist_no: '116556',
-              target_date: td, mode: '', month_week: 'month',
-              datetime_max_days: '1', select_timeorday: '1', price_type_no: '0',
-            });
-            const r = await fetch('/AjaxSearch', {
-              method: 'POST',
-              headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: params.toString(),
-            });
-            return r.text();
-          }, targetDate);
+      if (towerPage.url().includes('/login') || towerPage.url().includes('id-sso.reserva.be')) {
+        console.warn('  [東京タワー] ログインページへリダイレクト → スキップ');
+      } else {
+        for (const month of uniqueMonths) {
+          const targetDate = month.replace('-', '/') + '/01';
+          const stamp = month.replace('-', '');
+          try {
+            const calText: string = await towerPage.evaluate(async (td: string) => {
+              const params = new URLSearchParams({
+                cmd: 'get_new_institution', reserve_bus_cd: '341125', reserve_ist_no: '116556',
+                target_date: td, mode: '', month_week: 'month',
+                datetime_max_days: '1', select_timeorday: '1', price_type_no: '0',
+              });
+              const r = await fetch('/AjaxSearch', {
+                method: 'POST',
+                headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params.toString(),
+              });
+              return r.text();
+            }, targetDate);
 
-          if (!calText || calText.length < 10) { console.warn(`  [${month}] 空レスポンス → スキップ`); continue; }
-          const parsed = JSON.parse(calText);
-          files[`tower_${stamp}.json`] = calText;
-          towerMonths.push(month);
-          // Extract slots
-          const monthSlots = extractTowerSlots(parsed.week_time_array ?? {}, today, 5);
-          for (const [k, v] of Object.entries(monthSlots)) {
-            if (!towerSlots[k]) towerSlots[k] = v;
-            else for (const c of v) if (!towerSlots[k].includes(c)) towerSlots[k].push(c);
+            if (!calText || calText.length < 10) { console.warn(`  [${month}] 空レスポンス → スキップ`); continue; }
+            const parsed = JSON.parse(calText);
+            files[`tower_${stamp}.json`] = calText;
+            towerMonths.push(month);
+            const monthSlots = extractTowerSlots(parsed.week_time_array ?? {}, today, 5);
+            for (const [k, v] of Object.entries(monthSlots)) {
+              if (!towerSlots[k]) towerSlots[k] = v;
+              else for (const c of v) if (!towerSlots[k].includes(c)) towerSlots[k].push(c);
+            }
+            console.log(`  ${month} OK (${calText.length}B)`);
+          } catch (e: any) {
+            console.warn(`  [${month}] 取得失敗: ${e.message}`);
           }
-          console.log(`  ${month} OK (${calText.length}B)`);
-        } catch (e: any) {
-          console.warn(`  [${month}] 取得失敗: ${e.message}`);
         }
       }
+    } finally {
+      await towerPage.close();
+      await towerCtx.close();
     }
-  } finally {
-    await towerPage.close();
-    await towerCtx.close();
+    files['tower_slots.json'] = makeSlotFile('東京タワー', 'https://reserva.be/tokyotowerpickleball', towerSlots);
+    console.log(`  tower slots: ${Object.keys(towerSlots).length}`);
+  } else {
+    console.log('\n[東京タワー] スキップ（ブラウザなしモード）');
   }
-  files['tower_slots.json'] = makeSlotFile('東京タワー', 'https://reserva.be/tokyotowerpickleball', towerSlots);
-  console.log(`  tower slots: ${Object.keys(towerSlots).length}`);
 
   // ──────────────────────────────────────────
   // PBT (labola.jp) — rate-limited
@@ -715,24 +727,32 @@ function extractTowerSlots(weekTimeArray: Record<string, any>, today: string, st
   } catch (e: any) { console.warn(`  [pickle9] エラー: ${e.message}`); }
 
   // ──────────────────────────────────────────
-  // PB1豊洲
+  // PB1豊洲 (ブラウザ使用: 週ナビゲーション)
   // ──────────────────────────────────────────
-  console.log('\n[PB1豊洲] Playwright取得開始');
-  try {
-    const slots = await fetchToyosuSlots(browser, today, 4);
-    files['toyosu_slots.json'] = makeSlotFile('PB1豊洲', 'https://rsv.pickle-one.com/pb1-toyosu/reservations/new/slots', slots);
-    console.log(`  toyosu slots: ${Object.keys(slots).length}`);
-  } catch (e: any) { console.warn(`  [PB1豊洲] エラー: ${e.message}`); }
+  if (USE_BROWSER) {
+    console.log('\n[PB1豊洲] Playwright取得開始');
+    try {
+      const slots = await fetchToyosuSlots(browser!, today, 4);
+      files['toyosu_slots.json'] = makeSlotFile('PB1豊洲', 'https://rsv.pickle-one.com/pb1-toyosu/reservations/new/slots', slots);
+      console.log(`  toyosu slots: ${Object.keys(slots).length}`);
+    } catch (e: any) { console.warn(`  [PB1豊洲] エラー: ${e.message}`); }
+  } else {
+    console.log('\n[PB1豊洲] スキップ（ブラウザなしモード）');
+  }
 
   // ──────────────────────────────────────────
-  // パシフィック
+  // パシフィック (ブラウザ使用: 週ナビゲーション)
   // ──────────────────────────────────────────
-  console.log('\n[パシフィック] Playwright取得開始');
-  try {
-    const slots = await fetchPacificSlots(browser, today, 3);
-    files['pacific_slots.json'] = makeSlotFile('パシフィックピックルクラブ', 'https://pacificpickleclub.resv.jp/reserve/calendar.php', slots);
-    console.log(`  pacific slots: ${Object.keys(slots).length}`);
-  } catch (e: any) { console.warn(`  [パシフィック] エラー: ${e.message}`); }
+  if (USE_BROWSER) {
+    console.log('\n[パシフィック] Playwright取得開始');
+    try {
+      const slots = await fetchPacificSlots(browser!, today, 3);
+      files['pacific_slots.json'] = makeSlotFile('パシフィックピックルクラブ', 'https://pacificpickleclub.resv.jp/reserve/calendar.php', slots);
+      console.log(`  pacific slots: ${Object.keys(slots).length}`);
+    } catch (e: any) { console.warn(`  [パシフィック] エラー: ${e.message}`); }
+  } else {
+    console.log('\n[パシフィック] スキップ（ブラウザなしモード）');
+  }
 
   // ──────────────────────────────────────────
   // metadata
@@ -755,7 +775,7 @@ function extractTowerSlots(weekTimeArray: Record<string, any>, today: string, st
 
   console.log(`\n取得結果: 新橋 ${shimbashiDates.length}日 / タワー ${towerMonths.length}ヶ月 / PBT ${labolaDates.length}/${LABOLA_DAYS}日`);
   await updateGist(files);
-  await browser.close();
+  if (browser) await browser.close();
   console.log('完了');
 })().catch(err => {
   console.error('エラー:', err.message);
